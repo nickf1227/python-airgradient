@@ -96,11 +96,35 @@ class AirGradientClient:
 
     async def get_current_measures(self) -> Measures:
         """Get current measures from AirGradient."""
-        response = await self._request_device("measures/current")
-        try:
-            return Measures.from_json(response)
-        except MissingField as err:
-            raise AirGradientParseError from err
+        samples = []
+        attempts = 0
+        while len(samples) < 3 and attempts < 5:
+            try:
+                response = await self._request_device("measures/current")
+                measures = Measures.from_json(response)
+                samples.append(measures)
+                await asyncio.sleep(3)
+            except (AirGradientConnectionError, AirGradientParseError, MissingField) as err:
+                attempts += 1
+                if attempts >= 5:
+                    raise AirGradientParseError("Failed to get 3 valid samples") from err
+                await asyncio.sleep(3)
+
+        # Average the measures
+        averaged_measures = self._average_measures(samples)
+        return averaged_measures
+
+    def _average_measures(self, samples: list[Measures]) -> Measures:
+        """Average the measures from multiple samples."""
+        if not samples:
+            raise ValueError("No samples to average")
+
+        averaged_data = {}
+        for field in Measures.__annotations__.keys():
+            values = [getattr(sample, field) for sample in samples]
+            averaged_data[field] = sum(values) / len(values)
+
+        return Measures(**averaged_data)
 
     async def get_config(self) -> Config:
         """Get config from AirGradient device."""
